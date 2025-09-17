@@ -15,7 +15,12 @@ Run:
 """
 
 from __future__ import annotations
-import os, json, math
+import json, os, pickle, math
+try:
+    from huggingface_hub import hf_hub_download
+except ImportError:
+    hf_hub_download = None
+
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 
@@ -25,88 +30,6 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_plotly_events import plotly_events
-
-# Hugging Face (for helper artifact download)
-try:
-    from huggingface_hub import hf_hub_download
-except ImportError:
-    hf_hub_download = None
-
-# ----------------------------- CONFIG -------------------------------------------
-ROOT = Path(__file__).parent
-DATA_DIR = ROOT / "data"
-DERIVED_DIR = ROOT / "derived"
-STATES_NPY = DATA_DIR / "states_all.npy"
-TRAJ_INDEX_PARQUET = DATA_DIR / "traj_index.parquet"
-DATA_DIR.mkdir(exist_ok=True)
-DERIVED_DIR.mkdir(exist_ok=True)
-
-GRID_H_DEFAULT, GRID_W_DEFAULT, T_SLOTS_DEFAULT = 40, 50, 288
-TRAFFIC_NEIGHBORHOOD = 5
-TRAFFIC_FEATURES = ["Traffic Speed", "Traffic Volume", "Traffic Demand", "Traffic Waiting"]
-TRAFFIC_COUNT_DEFAULT = (TRAFFIC_NEIGHBORHOOD ** 2) * len(TRAFFIC_FEATURES)
-
-st.set_page_config(page_title="Expert Explorer — fast IL viz", layout="wide")
-
-def ensure_hf_artifacts():
-    """
-    Ensure large helper artifacts exist locally; download from Hugging Face if absent.
-    Env (optional):
-      HF_REPO (default: nthPerson/cGAIL-taxi-helper)
-      HF_REVISION (default: main)
-      HF_FILE_STATES (default: states_all.npy)
-      HF_FILE_INDEX  (default: traj_index.parquet)
-    """
-    if STATES_NPY.exists() and TRAJ_INDEX_PARQUET.exists():
-        return
-    if hf_hub_download is None:
-        st.error("huggingface_hub not installed and helper artifacts missing.")
-        st.stop()
-
-    repo_id = os.environ.get("HF_REPO", "nthPerson/cGAIL-taxi-helper")
-    revision = os.environ.get("HF_REVISION", "main")
-    fname_states = os.environ.get("HF_FILE_STATES", "states_all.npy")
-    fname_index  = os.environ.get("HF_FILE_INDEX", "traj_index.parquet")
-
-    with st.spinner(f"Downloading helper artifacts from {repo_id} …"):
-        try:
-            if not STATES_NPY.exists():
-                hf_hub_download(
-                    repo_id=repo_id,
-                    filename=fname_states,
-                    repo_type="dataset",
-                    revision=revision,
-                    local_dir=str(DATA_DIR),
-                    local_dir_use_symlinks=False
-                )
-            if not TRAJ_INDEX_PARQUET.exists():
-                hf_hub_download(
-                    repo_id=repo_id,
-                    filename=fname_index,
-                    repo_type="dataset",
-                    revision=revision,
-                    local_dir=str(DATA_DIR),
-                    local_dir_use_symlinks=False
-                )
-        except Exception as e:
-            st.error(f"Download failed: {e}")
-            st.stop()
-
-ensure_hf_artifacts()
-if not (STATES_NPY.exists() and TRAJ_INDEX_PARQUET.exists()):
-    st.error("Missing helper artifacts after download attempt.")
-    st.stop()
-
-# ----------------------------- SIDEBAR -------------------------------------------
-st.sidebar.title("Data Selector")
-grid_h, grid_w, t_slots = GRID_H_DEFAULT, GRID_W_DEFAULT, T_SLOTS_DEFAULT
-traffic_start = 0
-traffic_len = TRAFFIC_COUNT_DEFAULT
-poi_start = traffic_start + traffic_len
-poi_count = 23
-temporal_start = poi_start + poi_count
-x_idx = y_idx = t_idx = -1  # force inference only
-action_mode = "18 actions (extended)"
 
 # ----------------------------- EARLY FAST LOADER NEEDED BY SIDEBAR ---------------
 @st.cache_data(show_spinner=False)
@@ -125,15 +48,90 @@ def load_lengths(lengths_dir: str, expert: str) -> np.ndarray:
     except Exception:
         return np.array([], dtype=np.int32)
 
-# ----------------------- HELPER PATH REGISTRY ------------------------------------
-summary_parquet = DERIVED_DIR / "experts_summary.parquet"
-helper_paths = dict(
-    summary_parquet=str(summary_parquet),
-    lengths_dir=str(DERIVED_DIR / "lengths_by_expert"),
-    paths_parquet=str(DERIVED_DIR / "paths.parquet"),
-    visit_npz=str(DERIVED_DIR / "visitation_overall.npz"),
-    meta=str(DERIVED_DIR / "derived_meta.json")
-)
+# ----------------------------- CONFIG -------------------------------------------
+DATA_DIR = Path(__file__).parent / "data"
+STATES_NPY = DATA_DIR / "states_all.npy"
+TRAJ_INDEX_PARQUET = DATA_DIR / "traj_index.parquet"
+DATA_DIR.mkdir(exist_ok=True)
+
+# Helper‑only deployment: ignore PKL (env left for future)
+DEFAULT_PKL = os.environ.get("DATA_PKL", str(DATA_DIR / "all_trajs.pkl"))
+
+def ensure_hf_artifacts():
+    """
+    Ensure helper artifacts exist locally; download from Hugging Face if missing.
+    Env vars (optional):
+      HF_REPO        (default: <user>/cGAIL-taxi-helper)
+      HF_REVISION    (default: main)
+      HF_FILE_STATES (default: states_all.npy)
+      HF_FILE_INDEX  (default: traj_index.parquet)
+    """
+    if STATES_NPY.exists() and TRAJ_INDEX_PARQUET.exists():
+        return
+    if hf_hub_download is None:
+        st.error("huggingface_hub not installed and helper artifacts are missing.")
+        st.stop()
+    repo_id = os.environ.get("HF_REPO", "nthPerson/cGAIL-taxi-helper")
+    revision = os.environ.get("HF_REVISION", "main")
+    fname_states = os.environ.get("HF_FILE_STATES", "states_all.npy")
+    fname_index  = os.environ.get("HF_FILE_INDEX", "traj_index.parquet")
+    with st.spinner(f"Downloading helper artifacts from {repo_id} …"):
+        try:
+            if not STATES_NPY.exists():
+                lp = hf_hub_download(repo_id=repo_id, filename=fname_states,
+                                     repo_type="dataset", revision=revision)
+                Path(lp).replace(STATES_NPY)
+            if not TRAJ_INDEX_PARQUET.exists():
+                lp = hf_hub_download(repo_id=repo_id, filename=fname_index,
+                                     repo_type="dataset", revision=revision)
+                Path(lp).replace(TRAJ_INDEX_PARQUET)
+        except Exception as e:
+            st.error(f"Download failed: {e}")
+            st.stop()
+
+# Call before checking existence:
+ensure_hf_artifacts()
+
+# Decide mode AFTER potential download
+HELPER_CORE_EXISTS = STATES_NPY.exists() and TRAJ_INDEX_PARQUET.exists()
+DATA_MODE = "HELPER" if HELPER_CORE_EXISTS else "MISSING"
+if DATA_MODE == "MISSING":
+    st.error("Missing helper artifacts (states_all.npy + traj_index.parquet).")
+    st.stop()
+
+DERIVED_DIR = Path("./derived")  # helper files live here
+DERIVED_DIR.mkdir(parents=True, exist_ok=True)
+
+GRID_H_DEFAULT, GRID_W_DEFAULT, T_SLOTS_DEFAULT = 40, 50, 288  # 40x50 grid, 288 five-minute slots/day
+
+TRAFFIC_NEIGHBORHOOD = 5
+TRAFFIC_FEATURES = ["Traffic Speed", "Traffic Volume", "Traffic Demand", "Traffic Waiting"]
+TRAFFIC_COUNT_DEFAULT = (TRAFFIC_NEIGHBORHOOD ** 2) * len(TRAFFIC_FEATURES)  # 100
+
+st.set_page_config(page_title="Expert Explorer — fast IL viz", layout="wide")
+
+# ----------------------------- SIDEBAR (REVAMPED) --------------------------------
+st.sidebar.title("Data Selector")
+
+# (Dataset + static grid params — keep hard‑coded for now)
+pkl_path = DEFAULT_PKL
+grid_h = GRID_H_DEFAULT
+grid_w = GRID_W_DEFAULT
+t_slots = T_SLOTS_DEFAULT
+
+# Feature block (kept static)
+traffic_start = 0
+traffic_len = TRAFFIC_COUNT_DEFAULT
+poi_start = traffic_start + traffic_len
+poi_count = 23
+temporal_start = poi_start + poi_count
+
+# Removed: X/Y/T index & action space selectors.
+# Set them to -1 so downstream code knows they are unavailable.
+x_idx = -1
+y_idx = -1
+t_idx = -1
+action_mode = "18 actions (extended)"
 
 # Load summary early so we can drive sidebar selectors
 # (helper_paths is created a bit later; we need a safe path first)
@@ -194,6 +192,15 @@ def read_meta() -> dict:
 def write_meta(meta: dict) -> None:
     derived_meta_path().write_text(json.dumps(meta, indent=2))
 
+@st.cache_resource(show_spinner=True)
+def load_pkl(path: str) -> Dict[str, List[List[List[float]]]]:
+    """Load the original pickle once per session; keep it out of cache keys elsewhere."""
+    with open(path, "rb") as f:
+        raw = pickle.load(f)
+    # normalize expert keys to strings
+    return {str(k): v for k, v in raw.items()}
+
+
 # ----------------------- HELPER FILE BUILDER -------------------------------------
 # We skip ensure_helpers building from PKL (no PKL). Reconstruct helper_paths directly.
 summary_parquet = DERIVED_DIR / "experts_summary.parquet"
@@ -202,7 +209,7 @@ helper_paths = dict(
     lengths_dir=str(DERIVED_DIR / "lengths_by_expert"),
     paths_parquet=str(DERIVED_DIR / "paths.parquet"),
     visit_npz=str(DERIVED_DIR / "visitation_overall.npz"),
-    meta=read_meta()
+    # meta=read_meta()
 )
 
 @st.cache_data(show_spinner=False)
