@@ -71,7 +71,7 @@ def ensure_hf_artifacts():
     if hf_hub_download is None:
         st.error("huggingface_hub not installed and helper artifacts are missing.")
         st.stop()
-    repo_id = os.environ.get("HF_REPO", "<user>/cGAIL-taxi-helper")
+    repo_id = os.environ.get("HF_REPO", "nthPerson/cGAIL-taxi-helper")
     revision = os.environ.get("HF_REVISION", "main")
     fname_states = os.environ.get("HF_FILE_STATES", "states_all.npy")
     fname_index  = os.environ.get("HF_FILE_INDEX", "traj_index.parquet")
