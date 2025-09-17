@@ -30,6 +30,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_plotly_events import plotly_events
+import shutil
 
 # ----------------------------- EARLY FAST LOADER NEEDED BY SIDEBAR ---------------
 @st.cache_data(show_spinner=False)
@@ -60,33 +61,55 @@ DEFAULT_PKL = os.environ.get("DATA_PKL", str(DATA_DIR / "all_trajs.pkl"))
 def ensure_hf_artifacts():
     """
     Ensure helper artifacts exist locally; download from Hugging Face if missing.
-    Env vars (optional):
-      HF_REPO        (default: <user>/cGAIL-taxi-helper)
-      HF_REVISION    (default: main)
-      HF_FILE_STATES (default: states_all.npy)
-      HF_FILE_INDEX  (default: traj_index.parquet)
+    Avoid cross-device rename by:
+      - Requesting download directly into DATA_DIR (local_dir_use_symlinks=False)
+      - Falling back to copy if the hub still returns a cache path.
     """
     if STATES_NPY.exists() and TRAJ_INDEX_PARQUET.exists():
         return
     if hf_hub_download is None:
         st.error("huggingface_hub not installed and helper artifacts are missing.")
         st.stop()
+
     repo_id = os.environ.get("HF_REPO", "nthPerson/cGAIL-taxi-helper")
     revision = os.environ.get("HF_REVISION", "main")
     fname_states = os.environ.get("HF_FILE_STATES", "states_all.npy")
     fname_index  = os.environ.get("HF_FILE_INDEX", "traj_index.parquet")
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _fetch(fname: str, target: Path):
+        if target.exists():
+            return
+        # Try to have HF copy the file directly into DATA_DIR (no symlink)
+        local_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=fname,
+            repo_type="dataset",
+            revision=revision,
+            local_dir=str(DATA_DIR),
+            local_dir_use_symlinks=False
+        )
+        lp = Path(local_path)
+        if lp == target or target.exists():
+            return
+        # Fallback: copy (NOT rename) to avoid cross-device link errors
+        try:
+            shutil.copy2(lp, target)
+        except Exception as e:
+            # Final fallback: streamed copy
+            try:
+                with open(lp, "rb") as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+            except Exception as e2:
+                raise RuntimeError(f"Failed to place {fname}: {e} / {e2}")
+
     with st.spinner(f"Downloading helper artifacts from {repo_id} …"):
         try:
-            if not STATES_NPY.exists():
-                lp = hf_hub_download(repo_id=repo_id, filename=fname_states,
-                                     repo_type="dataset", revision=revision)
-                Path(lp).replace(STATES_NPY)
-            if not TRAJ_INDEX_PARQUET.exists():
-                lp = hf_hub_download(repo_id=repo_id, filename=fname_index,
-                                     repo_type="dataset", revision=revision)
-                Path(lp).replace(TRAJ_INDEX_PARQUET)
+            _fetch(fname_states, STATES_NPY)
+            _fetch(fname_index, TRAJ_INDEX_PARQUET)
         except Exception as e:
-            st.error(f"Download failed: {e}")
+            st.error(f"Download failed: {e.__class__.__name__}: {e}")
             st.stop()
 
 # Call before checking existence:
