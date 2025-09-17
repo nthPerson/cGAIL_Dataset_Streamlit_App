@@ -1091,5 +1091,3 @@ def action_space_18() -> go.Figure:
 
 st.plotly_chart(action_space_18(), use_container_width=True)
 st.caption("Hover any marker for semantics. Center S = stay; neighbors = move to adjacent region. Each has both 'now' and 'next window' variants (18 total).")
-
-st.caption("Helper files cached in ./derived/. Change schema or PKL to trigger a rebuild.")
