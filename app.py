@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Expert Explorer — fast, hierarchical visualization for taxi IL trajectories.
 
@@ -17,6 +16,11 @@ Run:
 
 from __future__ import annotations
 import json, os, pickle, math
+try:
+    from huggingface_hub import hf_hub_download
+except ImportError:
+    hf_hub_download = None
+
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 
@@ -45,7 +49,56 @@ def load_lengths(lengths_dir: str, expert: str) -> np.ndarray:
         return np.array([], dtype=np.int32)
 
 # ----------------------------- CONFIG -------------------------------------------
-DEFAULT_PKL = "/home/robert/FAMAIL/data/Processed_Data/all_trajs.pkl"
+DATA_DIR = Path(__file__).parent / "data"
+STATES_NPY = DATA_DIR / "states_all.npy"
+TRAJ_INDEX_PARQUET = DATA_DIR / "traj_index.parquet"
+DATA_DIR.mkdir(exist_ok=True)
+
+# Helper‑only deployment: ignore PKL (env left for future)
+DEFAULT_PKL = os.environ.get("DATA_PKL", str(DATA_DIR / "all_trajs.pkl"))
+
+def ensure_hf_artifacts():
+    """
+    Ensure helper artifacts exist locally; download from Hugging Face if missing.
+    Env vars (optional):
+      HF_REPO        (default: <user>/cGAIL-taxi-helper)
+      HF_REVISION    (default: main)
+      HF_FILE_STATES (default: states_all.npy)
+      HF_FILE_INDEX  (default: traj_index.parquet)
+    """
+    if STATES_NPY.exists() and TRAJ_INDEX_PARQUET.exists():
+        return
+    if hf_hub_download is None:
+        st.error("huggingface_hub not installed and helper artifacts are missing.")
+        st.stop()
+    repo_id = os.environ.get("HF_REPO", "<user>/cGAIL-taxi-helper")
+    revision = os.environ.get("HF_REVISION", "main")
+    fname_states = os.environ.get("HF_FILE_STATES", "states_all.npy")
+    fname_index  = os.environ.get("HF_FILE_INDEX", "traj_index.parquet")
+    with st.spinner(f"Downloading helper artifacts from {repo_id} …"):
+        try:
+            if not STATES_NPY.exists():
+                lp = hf_hub_download(repo_id=repo_id, filename=fname_states,
+                                     repo_type="dataset", revision=revision)
+                Path(lp).replace(STATES_NPY)
+            if not TRAJ_INDEX_PARQUET.exists():
+                lp = hf_hub_download(repo_id=repo_id, filename=fname_index,
+                                     repo_type="dataset", revision=revision)
+                Path(lp).replace(TRAJ_INDEX_PARQUET)
+        except Exception as e:
+            st.error(f"Download failed: {e}")
+            st.stop()
+
+# Call before checking existence:
+ensure_hf_artifacts()
+
+# Decide mode AFTER potential download
+HELPER_CORE_EXISTS = STATES_NPY.exists() and TRAJ_INDEX_PARQUET.exists()
+DATA_MODE = "HELPER" if HELPER_CORE_EXISTS else "MISSING"
+if DATA_MODE == "MISSING":
+    st.error("Missing helper artifacts (states_all.npy + traj_index.parquet).")
+    st.stop()
+
 DERIVED_DIR = Path("./derived")  # helper files live here
 DERIVED_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -119,14 +172,15 @@ st.sidebar.markdown("Selectors drive: State details, Trajectory path, Visitation
 
 # ----------------------------- UTILS --------------------------------------------
 def file_sig(path: str) -> str:
-    """Tiny string used as cache key; avoids hashing the giant dataset."""
+    # In helper-only mode this is unused; retained for compatibility.
     p = Path(path)
     if not p.exists(): return "missing"
     stt = p.stat()
     return f"{stt.st_size}-{int(stt.st_mtime)}"
 
-SIG = file_sig(pkl_path)
+SIG = "helper-only"
 
+# (meta helpers unchanged)
 def derived_meta_path() -> Path:
     return DERIVED_DIR / "derived_meta.json"
 
@@ -147,162 +201,126 @@ def load_pkl(path: str) -> Dict[str, List[List[List[float]]]]:
     return {str(k): v for k, v in raw.items()}
 
 
-# ----------------------- FAST LOADERS (cached by tiny keys) -----------------------
-@st.cache_data(show_spinner=False)
-def load_summary(p: str) -> pd.DataFrame:
-    return pd.read_parquet(p)
-
-@st.cache_data(show_spinner=False)
-def load_paths(paths_parquet: str, expert: Optional[str]=None) -> pd.DataFrame:
-    p = Path(paths_parquet)
-    if not p.exists(): return pd.DataFrame()
-    df = pd.read_parquet(p)
-    if expert is not None:
-        df = df[df["expert"] == str(expert)]
-    return df
-
-@st.cache_data(show_spinner=False)
-def load_visit_npz(npz_path: str) -> Optional[np.ndarray]:
-    p = Path(npz_path)
-    if not p.exists(): return None
-    return np.load(p)["counts"]
-
 # ----------------------- HELPER FILE BUILDER -------------------------------------
-def ensure_helpers(pkl_sig: str,
-                   grid_h: int, grid_w: int, t_slots: int,
-                   x_idx: int, y_idx: int, t_idx: int) -> dict:
+# We skip ensure_helpers building from PKL (no PKL). Reconstruct helper_paths directly.
+summary_parquet = DERIVED_DIR / "experts_summary.parquet"
+helper_paths = dict(
+    summary_parquet=str(summary_parquet),
+    lengths_dir=str(DERIVED_DIR / "lengths_by_expert"),
+    paths_parquet=str(DERIVED_DIR / "paths.parquet"),
+    visit_npz=str(DERIVED_DIR / "visitation_overall.npz"),
+    meta=read_meta()
+)
+
+@st.cache_data(show_spinner=False)
+def load_summary(path: str) -> pd.DataFrame:
     """
-    Build helper files if missing or if schema/file signature changed.
-
-    Writes:
-      - experts_summary.parquet : per-expert counts
-      - lengths_by_expert/*.npy : trajectory lengths per expert
-      - paths.parquet (optional) : expert, traj_idx, state_idx, y, x, t (if x/y present)
-      - visitation_overall.npz (optional) : (grid_h, grid_w, t_slots) counts across all experts
+    Load experts summary parquet (built offline) with graceful fallback.
+    Ensures required columns exist even if file missing or partly corrupt.
     """
-    meta = read_meta()
-    wanted = dict(
-        pkl_sig=pkl_sig, grid_h=grid_h, grid_w=grid_w, t_slots=t_slots,
-        x_idx=x_idx, y_idx=y_idx, t_idx=t_idx, version=2
-    )
-    rebuild = (meta != wanted)
+    cols = [
+        "expert",
+        "trajectories",
+        "states_total",
+        "states_avg",
+        "states_min",
+        "states_med",
+        "states_max",
+        "states_p90"
+    ]
+    if not Path(path).exists():
+        return pd.DataFrame({c: [] for c in cols})
+    try:
+        df = pd.read_parquet(path)
+    except Exception:
+        return pd.DataFrame({c: [] for c in cols})
 
-    summary_parquet = DERIVED_DIR / "experts_summary.parquet"
-    lengths_dir = DERIVED_DIR / "lengths_by_expert"
-    lengths_dir.mkdir(exist_ok=True, parents=True)
-    paths_parquet = DERIVED_DIR / "paths.parquet"
-    visit_npz = DERIVED_DIR / "visitation_overall.npz"
+    # Add any missing columns with defaults
+    for c in cols:
+        if c not in df.columns:
+            if c == "expert":
+                df[c] = []
+            else:
+                df[c] = pd.Series(dtype="float64")
 
-    if rebuild or not summary_parquet.exists():
-        st.info("Building helper files (first run or schema changed)…")
-        DATA = load_pkl(pkl_path)
+    # Normalize dtypes
+    df["expert"] = df["expert"].astype(str)
+    numeric = [c for c in cols if c != "expert"]
+    for c in numeric:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df[cols].sort_values("expert").reset_index(drop=True)
 
-        # --- summary + lengths
-        rows = []
-        for e, trajs in DATA.items():
-            lens = np.fromiter((len(t) for t in trajs), dtype=np.int32)
-            np.save(lengths_dir / f"{e}.npy", lens)
-            rows.append(dict(
-                expert=str(e),
-                trajectories=int(lens.size),
-                states_total=int(lens.sum()),
-                states_avg=float(lens.mean()) if lens.size else 0.0,
-                states_min=int(lens.min()) if lens.size else 0,
-                states_med=float(np.median(lens)) if lens.size else 0.0,
-                states_max=int(lens.max()) if lens.size else 0,
-                states_p90=float(np.percentile(lens, 90)) if lens.size else 0.0,
-            ))
-        pd.DataFrame(rows).to_parquet(summary_parquet, index=False)
-
-        # --- optional path/time extraction
-        if x_idx >= 0 and y_idx >= 0:
-            # write compact (expert, traj, state, y, x, maybe t)
-            # we keep small dtypes to shrink disk size
-            recs_e, recs_t, recs_s, recs_y, recs_x, recs_tt = [], [], [], [], [], []
-            for e, trajs in DATA.items():
-                for ti, traj in enumerate(trajs):
-                    for si, state in enumerate(traj):
-                        v = np.asarray(state)
-                        xx, yy = int(round(v[x_idx])), int(round(v[y_idx]))
-                        recs_e.append(str(e)); recs_t.append(np.int32(ti)); recs_s.append(np.int32(si))
-                        recs_x.append(np.int16(max(0, min(grid_w-1, xx))))
-                        recs_y.append(np.int16(max(0, min(grid_h-1, yy))))
-                        if t_idx >= 0:
-                            tt = int(round(v[t_idx])); recs_tt.append(np.int16(max(0, min(t_slots-1, tt))))
-                        else:
-                            recs_tt.append(np.int16(-1))
-            df_paths = pd.DataFrame(dict(
-                expert=recs_e, traj_idx=recs_t, state_idx=recs_s,
-                y=recs_y, x=recs_x, t=recs_tt
-            ))
-            df_paths.to_parquet(paths_parquet, index=False)
-
-            # overall visitation (3D) if time available
-            if t_idx >= 0:
-                grid = np.zeros((grid_h, grid_w, t_slots), dtype=np.uint32)
-                # vectorized bincount via flat indices
-                flat = (df_paths["y"].astype(np.int64) * grid_w + df_paths["x"].astype(np.int64)) * t_slots + df_paths["t"].astype(np.int64)
-                valid = flat >= 0
-                bc = np.bincount(flat[valid], minlength=grid_h*grid_w*t_slots)
-                grid = bc.reshape(grid_h, grid_w, t_slots)
-                np.savez_compressed(visit_npz, counts=grid)
-
-        write_meta(wanted)
-    else:
-        # If grid indices are no longer available, remove stale spatial helper files
-        if (x_idx < 0 or y_idx < 0):
-            if paths_parquet.exists():
-                try: paths_parquet.unlink()
-                except Exception: pass
-            if visit_npz.exists():
-                try: visit_npz.unlink()
-                except Exception: pass
-
-    return dict(
-        summary_parquet=str(summary_parquet),
-        lengths_dir=str(lengths_dir),
-        paths_parquet=str(paths_parquet),
-        visit_npz=str(visit_npz),
-        meta=read_meta()
-    )
-
-# (helper_paths created here as before)
-helper_paths = ensure_helpers(SIG, grid_h, grid_w, t_slots, x_idx, y_idx, t_idx)
-
-# Reload summary now that helpers may have been (re)built
+# Load summary
 summary = load_summary(helper_paths["summary_parquet"])
-if sel_expert not in summary["expert"].astype(str).tolist():
-    # If sidebar was shown before helper build, reset to first expert now
-    sel_expert = summary.iloc[0]["expert"]
 
-# ---------------------------- SMALL HELPERS ---------------------------------------
-def state_vec_from_pkl(dataset: Dict[str, Any], expert: str, traj_idx: int, state_idx: int) -> np.ndarray:
-    return np.asarray(dataset[expert][traj_idx][state_idx], dtype=float)
+# ----------------------- LOAD CORE MATRICES --------------------------------------
+@st.cache_resource(show_spinner=False)
+def load_states_matrix(path: str):
+    return np.load(path, mmap_mode="r")
 
-def reshape_traffic_maps(vec: np.ndarray, start: int, count: int,
-                         n: int = TRAFFIC_NEIGHBORHOOD,
-                         feature_names: List[str] = TRAFFIC_FEATURES) -> Dict[str, np.ndarray]:
-    F = len(feature_names)
-    needed = n*n*F
-    if start < 0 or count < needed or start+needed > len(vec):
-        return {name: np.full((n, n), np.nan) for name in feature_names}
+@st.cache_data(show_spinner=False)
+def load_traj_index_df(path: str) -> pd.DataFrame:
+    return pd.read_parquet(path)
+
+STATES_MATRIX = load_states_matrix(str(STATES_NPY))
+TRAJ_INDEX = load_traj_index_df(str(TRAJ_INDEX_PARQUET))
+
+# Build lookup: expert -> list[(start,length)]
+lookup: Dict[str, List[Tuple[int,int]]] = {}
+for e, sub in TRAJ_INDEX.groupby("expert"):
+    max_ti = int(sub["traj_idx"].max()) if len(sub) else -1
+    arr = [(0,0)]*(max_ti+1)
+    for _, row in sub.iterrows():
+        arr[int(row.traj_idx)] = (int(row.start), int(row.length))
+    lookup[str(e)] = arr
+
+def state_vec_from_pkl(DATA, expert: str, traj_idx: int, state_idx: int) -> np.ndarray:
+    """Legacy stub retained for compatibility."""
+    raise RuntimeError("PKL mode disabled (helper-only deployment).")
+
+def get_state_vector(expert: str, traj_idx: int, state_idx: int) -> np.ndarray:
+    if expert not in lookup: return np.array([])
+    traj_list = lookup[expert]
+    if traj_idx >= len(traj_list): return np.array([])
+    start, length = traj_list[traj_idx]
+    if state_idx < 0 or state_idx >= length: return np.array([])
+    return STATES_MATRIX[start + state_idx]
+
+def get_trajectory(expert: str, traj_idx: int) -> np.ndarray:
+    if expert not in lookup: return np.empty((0,0))
+    traj_list = lookup[expert]
+    if traj_idx >= len(traj_list): return np.empty((0,0))
+    start, length = traj_list[traj_idx]
+    if length == 0: return np.empty((0, STATES_MATRIX.shape[1]))
+    return STATES_MATRIX[start:start+length]
+
+def fetch_trajectory_for_infer(expert: str, traj_idx: int) -> List[List[float]]:
+    arr = get_trajectory(expert, traj_idx)
+    return arr.tolist()
+
+def reshape_traffic_maps(vec: np.ndarray,
+                         start: int,
+                         traffic_len: int,
+                         n: int = 5,
+                         feature_names: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
+    """
+    Slice traffic neighborhood features from a state vector and reshape into
+    per-feature (n x n) grids.
+    """
+    feature_names = feature_names or [f"feat{i}" for i in range(traffic_len // (n*n))]
+    needed = n * n * len(feature_names)
+    out: Dict[str, np.ndarray] = {}
+    if vec is None or len(vec) < start + needed:
+        for name in feature_names:
+            out[name] = np.full((n, n), np.nan, dtype=float)
+        return out
     block = vec[start:start+needed]
-    out = {name: np.zeros((n, n), float) for name in feature_names}
-    for cell in range(n*n):
-        r, c = divmod(cell, n)
-        base = cell*F
-        for fi, name in enumerate(feature_names):
-            out[name][r, c] = block[base+fi]
+    for i, name in enumerate(feature_names):
+        sub = block[i*n*n:(i+1)*n*n]
+        out[name] = np.asarray(sub, dtype=float).reshape(n, n)
     return out
 
-def argpartition_reps(lens: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    if lens.size == 0: return np.array([], int), np.array([], int), np.array([], int)
-    k = min(k, lens.size)
-    shortest = np.argpartition(lens, k-1)[:k]
-    longest = np.argpartition(-lens, k-1)[:k]
-    med = np.median(lens)
-    typical = np.argpartition(np.abs(lens - med), k-1)[:k]
-    return shortest, typical, longest
+st.caption("Data mode: HELPER ONLY (no original pickle loaded)")
 
 # ================================================================================
 #                                APP BODY
@@ -310,19 +328,8 @@ def argpartition_reps(lens: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray,
 
 st.title("Expert Explorer — cGAIL Taxi Dataset")
 
-# ---------------------- DATA SUMMARY (1) & MODEL SUMMARY (2) ----------------------
-summary = load_summary(helper_paths["summary_parquet"])
-
-# Infer features per state from the original PKL (load once)
-with st.spinner("Warming up (loading original pickle once…)"):
-    DATA = load_pkl(pkl_path)
-first_expert = next(iter(DATA.keys()))
-first_state_vec = np.asarray(DATA[first_expert][0][0], dtype=float)
-
-# Want to add a description of the model here: 
-#   see cGAIL paper for visual (maybe include the vis)
-# 
-
+# ---------------------- DATA SUMMARY METRICS -------------------------------------
+first_state_vec = STATES_MATRIX[0] if STATES_MATRIX.shape[0] else np.array([])
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Experts", f"{len(summary):,}")
 c2.metric("Total trajectories", f"{int(summary['trajectories'].sum()):,}")
@@ -447,10 +454,9 @@ metric_cols[2].metric(f"States visited in trajectory {sel_traj_idx}", f"{traj_le
 
 # fetch vector directly
 if traj_len == 0:
-    st.info("Selected trajectory is empty.")
     vec = np.array([])
 else:
-    vec = state_vec_from_pkl(DATA, sel_expert, sel_traj_idx, sel_state_idx)
+    vec = get_state_vector(sel_expert, sel_traj_idx, sel_state_idx)
 
 st.markdown(f"**State vector (trajectory {sel_traj_idx}, state {sel_state_idx})**")
 feat_df = pd.DataFrame({"dim": [f"f{i}" for i in range(len(vec))], "value": vec})
@@ -504,7 +510,7 @@ for i, name in enumerate(TRAFFIC_FEATURES):
 
 st.divider()
 
-# ---------------------- TRAJECTORY ON GRID (6) ------------------------------------
+# ---------------------- TRAJECTORY PATH SECTION ----------------------------------
 st.header("Trajectory path on grid (40×50)")
 
 def infer_position_dims(traj: List[List[float]], grid_h: int, grid_w: int,
@@ -549,19 +555,15 @@ def infer_position_dims(traj: List[List[float]], grid_h: int, grid_w: int,
 
 @st.fragment
 def draw_path_for_trajectory(expert: str, traj_idx: int, state_idx: int):
-    if expert not in DATA or traj_idx >= len(DATA[expert]):
-        st.info("Trajectory not available.")
+    traj_arr = get_trajectory(expert, traj_idx)
+    if traj_arr.size == 0:
+        st.info("Trajectory not available or empty.")
         return
-    traj = DATA[expert][traj_idx]
-    if not traj:
-        st.info("Empty trajectory.")
-        return
+    traj = traj_arr.tolist()
 
     # Decide decoding strategy
-    decode_note = ""
     if x_idx >= 0 and y_idx >= 0:
-        xd, yd, fd = x_idx, y_idx, None
-        decode_note = f"explicit x={xd}, y={yd}"
+        xd, yd, fd, decode_note = x_idx, y_idx, None, f"explicit x={x_idx}, y={y_idx}"
     else:
         xd, yd, fd, decode_note = infer_position_dims(traj, grid_h, grid_w)
 
@@ -805,25 +807,26 @@ def visitation_panel():
 
     # ---- Helper: dynamic decode (slow fallback) ----
     def aggregate_dynamic(expert_subset: Optional[List[str]] = None) -> Tuple[np.ndarray, str]:
-        note_parts = []
         mat = np.zeros((grid_h, grid_w), dtype=np.int64)
-        experts_iter = expert_subset if expert_subset is not None else list(DATA.keys())
+        note_parts = []
+        experts_iter = expert_subset if expert_subset is not None else list(lookup.keys())
         for e in experts_iter:
-            trajs = DATA[e]
-            # find first non-empty trajectory to infer dims
+            traj_list = lookup[e]
+            # infer dims from first non-empty trajectory
             xd = yd = fd = None
-            inf_note = ""
-            for t in trajs:
-                if t:
-                    _, _, _, inf_note = infer_position_dims(t, grid_h, grid_w)
-                    xd_i, yd_i, fd_i, _ = infer_position_dims(t, grid_h, grid_w)
-                    xd, yd, fd = xd_i, yd_i, fd_i
+            for start, length in traj_list:
+                if length > 0:
+                    arr = STATES_MATRIX[start:start+length]
+                    xd, yd, fd, inf_note = infer_position_dims(arr, grid_h, grid_w)
+                    note_parts.append(f"{e}:{inf_note}")
                     break
             if xd is None and yd is None and fd is None:
                 continue
-            for t in trajs:
-                for state in t:
-                    v = np.asarray(state, dtype=float)
+            # accumulate
+            for start, length in traj_list:
+                if length == 0: continue
+                arr = STATES_MATRIX[start:start+length]
+                for v in arr:
                     if xd is not None and yd is not None:
                         xx, yy = int(round(v[xd])), int(round(v[yd]))
                     else:
@@ -834,7 +837,6 @@ def visitation_panel():
                             continue
                     if 0 <= xx < grid_w and 0 <= yy < grid_h:
                         mat[yy, xx] += 1
-            note_parts.append(f"{e}: {inf_note}")
         return mat, "; ".join(note_parts) if note_parts else "no positions decoded"
 
     # ---------------- Scope logic ----------------
