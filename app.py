@@ -32,6 +32,9 @@ import plotly.graph_objects as go
 from streamlit_plotly_events import plotly_events
 import shutil
 
+# Set page config FIRST (before any spinner / error / sidebar usage)
+st.set_page_config(page_title="Expert Explorer — fast IL viz", layout="wide")
+
 # ----------------------------- EARLY FAST LOADER NEEDED BY SIDEBAR ---------------
 @st.cache_data(show_spinner=False)
 def load_lengths(lengths_dir: str, expert: str) -> np.ndarray:
@@ -130,8 +133,6 @@ GRID_H_DEFAULT, GRID_W_DEFAULT, T_SLOTS_DEFAULT = 40, 50, 288  # 40x50 grid, 288
 TRAFFIC_NEIGHBORHOOD = 5
 TRAFFIC_FEATURES = ["Traffic Speed", "Traffic Volume", "Traffic Demand", "Traffic Waiting"]
 TRAFFIC_COUNT_DEFAULT = (TRAFFIC_NEIGHBORHOOD ** 2) * len(TRAFFIC_FEATURES)  # 100
-
-st.set_page_config(page_title="Expert Explorer — fast IL viz", layout="wide")
 
 # ----------------------------- SIDEBAR (REVAMPED) --------------------------------
 st.sidebar.title("Data Selector")
