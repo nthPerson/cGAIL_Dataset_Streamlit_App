@@ -192,7 +192,7 @@ else:
         step=1, key="sidebar_state_idx"
     )
 
-st.sidebar.markdown("Selectors drive: State details, Trajectory path, Visitation (Selected expert).")
+st.sidebar.markdown("Selectors drive: State details (state vector and traffic features), Trajectory path, State visitation counts (Selected expert only).")
 
 # ----------------------------- UTILS --------------------------------------------
 def file_sig(path: str) -> str:
@@ -350,15 +350,16 @@ st.caption("Data mode: HELPER ONLY (no original pickle loaded)")
 #                                APP BODY
 # ================================================================================
 
-st.title("Expert Explorer — cGAIL Taxi Dataset")
+st.title("cGAIL Dataset Explorer — Shenzhen Taxi Dataset")
 
 # ---------------------- DATA SUMMARY METRICS -------------------------------------
 first_state_vec = STATES_MATRIX[0] if STATES_MATRIX.shape[0] else np.array([])
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Experts", f"{len(summary):,}")
 c2.metric("Total trajectories", f"{int(summary['trajectories'].sum()):,}")
-c3.metric("Total states visited by experts", f"{int(summary['states_total'].sum()):,}")
+c3.metric("Total states visited in dataset", f"{int(summary['states_total'].sum()):,}")
 c4.metric("Features per state", f"{len(first_state_vec)}")
+c5.metric("Total data points in datasaet", f"{int(summary['states_total'].sum() * len(first_state_vec)):,}")
 
 with st.expander("Model summary & data flow", expanded=False):
     st.markdown(f"""
@@ -367,8 +368,8 @@ with st.expander("Model summary & data flow", expanded=False):
   - Traffic (5×5 neighborhood × 4 features = 100 dims): {', '.join(TRAFFIC_FEATURES)}
   - POI distances: {poi_count} dims
   - Temporal: remaining dims (time of day, day of week, etc.)
-- **Condition features**: driver, location (region) and optionally familiarity/home indicators.
-- **Action space**: **{ '18 (extended) — 9 spatial with/without time advance' if action_mode.startswith('18') else '9 (paper) — stay or move to 8 neighbors' }**.
+- **Condition features**: Home location distance, working schedule, familiarity (avg visitations to current state), and loction identifier.
+- **Action space**: **{ '18 — 9 spatial with/without time advance' if action_mode.startswith('18') else '9 (paper) — stay or move to 8 neighbors' }**.
 - **Raw → model flow**:
   1. Raw CSV → (plate_id, lat, lon, timestamp, passenger flag)
   2. Segment into **vacant trajectories** (drop-off → next pick-up)
@@ -418,35 +419,23 @@ def experts_treemap_panel():
             )
         )
     )
-    st.subheader("Experts (larger area indicates higher number of trajectories)")
+    st.subheader("Experts (larger area indicates higher trajectory count)")
     # Render treemap
     st.plotly_chart(treemap, use_container_width=True)
 
-    # NOTE: Without plotly_events we cannot capture click → automatic syncing
-    # of selected expert from treemap to the distribution panel is not possible.
-    # Users select expert via the selectbox below for now.
-    # (If you later allow plotly_events again, wrap it in a fragment to sync session_state.)
 experts_treemap_panel()
 
-st.subheader("Trajectory length distribution by expert")
-expert_list = summary["expert"].tolist()
-selected_expert = st.session_state.get("expert_selected", expert_list[0])
-matching_indices = summary.index[summary["expert"] == selected_expert].tolist()
-index = matching_indices[0] if matching_indices else 0
-expert = st.selectbox(
-    "Expert",
-    options=expert_list,
-    index=index,
-    key="expert_selectbox_right"
-)
-lens = load_lengths(helper_paths["lengths_dir"], expert)
+st.subheader("Trajectory length distribution (Expert selection from sidebar)")
+
+# Use sidebar-selected expert (sel_expert) instead of local selectbox
+lens = load_lengths(helper_paths["lengths_dir"], sel_expert)
 
 nbins = min(60, max(10, int(math.sqrt(max(1, lens.size)))))
 hist = go.Figure(data=[go.Histogram(x=lens, nbinsx=nbins)])
 hist.update_layout(
     height=300,
     margin=dict(l=0, r=0, t=10, b=0),
-    xaxis_title="Trajectory length (# states)",
+    xaxis_title=f"Trajectory length (# states) — Expert {sel_expert}",
     yaxis_title="Count"
 )
 st.plotly_chart(hist, use_container_width=True)
@@ -455,9 +444,6 @@ cA, cB, cC = st.columns(3)
 if lens.size:
     cA.metric("# Traj", f"{lens.size:,}")
     cB.metric("Mean", f"{lens.mean():.1f}")
-    # cC.metric("Median", f"{np.median(lens):.0f}")    
-    # cD.metric("IQR", f"{np.percentile(lens,75)-np.percentile(lens,25):.0f}")
-    # cE.metric("p90", f"{np.percentile(lens,90):.0f}")
     cC.metric("Min/Max", f"{lens.min():.0f}/{lens.max():.0f}")
 else:
     cA.metric("# Traj", "0"); cB.metric("Mean","-"); cC.metric("Min/Max","-")
@@ -465,7 +451,7 @@ else:
 st.divider()
 
 # ---------------------- SELECT → TRAJ → STATE (5) ---------------------------------
-st.header("State (select expert → trajectory → state)")
+st.header("State vector")
 
 # We now use sidebar selections (sel_expert, sel_traj_idx, sel_state_idx)
 lens_e = load_lengths(helper_paths["lengths_dir"], sel_expert)
@@ -880,7 +866,7 @@ def visitation_panel():
                 mat = aggregate_from_paths(df_all)
                 used = "aggregated from paths.parquet"
             else:
-                with st.spinner("Decoding all expert trajectories (no spatial helper files)…"):
+                with st.spinner("Decoding all expert trajectories…"):
                     mat, inf = aggregate_dynamic()
                 used = f"dynamic decode ({inf})"
         make_heatmap(mat, "All experts (aggregated)", f"")
