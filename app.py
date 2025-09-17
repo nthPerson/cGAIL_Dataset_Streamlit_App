@@ -510,50 +510,88 @@ if traj_len == 0:
 else:
     vec = get_state_vector(sel_expert, sel_traj_idx, sel_state_idx)
 
-st.markdown(f"**State vector (trajectory {sel_traj_idx}, state {sel_state_idx})**")
+st.markdown(f"**State vector (trajectory {sel_traj_idx}, state {sel_state_idx}) — Raw (unnormalized)**")
 feat_df = pd.DataFrame({"dim": [f"f{i}" for i in range(len(vec))], "value": vec})
-bar = px.bar(feat_df, x="dim", y="value")
-bar.update_layout(height=260, margin=dict(l=0,r=0,t=10,b=20), xaxis=dict(showticklabels=False))
-st.plotly_chart(bar, use_container_width=True)
+bar_raw = px.bar(feat_df, x="dim", y="value")
+bar_raw.update_layout(height=260, margin=dict(l=0,r=0,t=10,b=20), xaxis=dict(showticklabels=False))
+st.plotly_chart(bar_raw, use_container_width=True)
 
-# --- Normalized (Z-score) view -------------------------------------------------
+# --- Persistent normalization stats (mean, std, min, max, median, mad) ---------
+NORM_STATS_PATH = DERIVED_DIR / "norm_stats.npz"
+
 @st.cache_resource(show_spinner=False)
-def compute_norm_stats(matrix_path: str) -> Tuple[np.ndarray, np.ndarray]:
+def load_or_build_norm_stats(matrix_path: str, out_path: Path):
+    """Load normalization stats from disk or compute & persist them.
+    Stats:
+      mean, std (population), min, max, median, mad (median absolute deviation, scaled ~1.4826 for normal consistency)
+    Returns dict of numpy arrays.
     """
-    Compute per-dimension mean and std (ddof=0) for the full states matrix.
-    Returns (mean, std). Std values that are 0 are kept as 0 (guarded downstream).
-    Uses memory map already established by load_states_matrix.
-    """
+    if out_path.exists():
+        try:
+            data = np.load(out_path)
+            required = ["mean", "std", "min", "max", "median", "mad"]
+            if all(k in data for k in required):
+                return {k: data[k] for k in required}
+        except Exception:
+            pass  # fall through to rebuild
     mat = load_states_matrix(matrix_path)
-    # Compute along axis 0 (all states). Using float64 for stability.
+    # Use float64 for stability
     mean = np.asarray(mat.mean(axis=0), dtype=float)
-    # For std we manually compute to avoid issues with masked arrays from mmap.
-    # Equivalent to np.std(mat, axis=0)
     var = np.asarray(((mat - mean) ** 2).mean(axis=0), dtype=float)
     std = np.sqrt(var)
-    return mean, std
+    min_v = np.asarray(mat.min(axis=0), dtype=float)
+    max_v = np.asarray(mat.max(axis=0), dtype=float)
+    median = np.asarray(np.median(mat, axis=0), dtype=float)
+    mad = np.asarray(np.median(np.abs(mat - median), axis=0), dtype=float)
+    # Scale MAD to approximate std under normality
+    mad_scaled = mad * 1.4826
+    try:
+        np.savez_compressed(out_path, mean=mean, std=std, min=min_v, max=max_v, median=median, mad=mad_scaled)
+    except Exception:
+        pass  # non-fatal
+    return {"mean": mean, "std": std, "min": min_v, "max": max_v, "median": median, "mad": mad_scaled}
 
-if vec.size:
-    mean_all, std_all = compute_norm_stats(str(STATES_NPY))
-    # Guard length mismatch (should not happen unless schema drift)
-    if mean_all.shape[0] == vec.shape[0]:
-        # Avoid division by zero: where std==0, set z=0 (feature constant)
+show_norm = st.checkbox("Show normalized view", value=False, help="Toggle to compute & display normalized state vector (cached stats).")
+if show_norm and vec.size:
+    stats = load_or_build_norm_stats(str(STATES_NPY), NORM_STATS_PATH)
+    if stats["mean"].shape[0] == vec.shape[0]:
+        scale_mode = st.radio(
+            "Normalization scaling",
+            ["Z-score (mean/std)", "Min-Max [0,1]", "Robust (median/MAD)"],
+            horizontal=True,
+            key="norm_scale_mode"
+        )
+        mean_all = stats["mean"]
+        std_all = stats["std"]
+        min_all = stats["min"]
+        max_all = stats["max"]
+        median_all = stats["median"]
+        mad_all = stats["mad"]
         with np.errstate(divide='ignore', invalid='ignore'):
-            z = np.where(std_all > 0, (vec - mean_all) / std_all, 0.0)
-        z_df = pd.DataFrame({"dim": [f"f{i}" for i in range(len(z))], "z": z})
-        z_bar = px.bar(z_df, x="dim", y="z")
-        z_bar.update_layout(
+            if scale_mode.startswith("Z-score"):
+                values = np.where(std_all > 0, (vec - mean_all) / std_all, 0.0)
+                y_title = "Z-score"
+            elif scale_mode.startswith("Min-Max"):
+                denom = (max_all - min_all)
+                values = np.where(denom > 0, (vec - min_all) / denom, 0.0)
+                y_title = "Min-Max scaled"
+            else:  # Robust
+                values = np.where(mad_all > 0, (vec - median_all) / mad_all, 0.0)
+                y_title = "(value - median)/MAD"
+        norm_df = pd.DataFrame({"dim": [f"f{i}" for i in range(len(values))], "value": values})
+        bar_norm = px.bar(norm_df, x="dim", y="value")
+        bar_norm.update_layout(
             height=260,
             margin=dict(l=0,r=0,t=10,b=20),
             xaxis=dict(showticklabels=False),
-            yaxis=dict(title="Z-score")
+            yaxis=dict(title=y_title)
         )
-        st.markdown("**State vector (normalized Z-score)** — per-dimension (value - mean) / std using all states.")
-        st.plotly_chart(z_bar, use_container_width=True)
-        st.caption("Normalization stats computed once per session across all states. Constant features (std=0) appear with z=0.")
+        st.markdown(f"**State vector (normalized — {y_title})**")
+        st.plotly_chart(bar_norm, use_container_width=True)
+        st.caption("Stats persisted to norm_stats.npz (reused across runs). Constant features get 0 in all modes.")
     else:
-        st.warning("Normalization skipped: feature count mismatch with global stats.")
-else:
+        st.warning("Normalization skipped: feature count mismatch with stored stats.")
+elif show_norm and not vec.size:
     st.info("No state vector available for normalization.")
 
 # ---------------------- TRAFFIC NEIGHBORHOOD (5×5 × 4 features) ---------------------------------
