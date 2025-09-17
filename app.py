@@ -3,14 +3,11 @@ Expert Explorer — fast, hierarchical visualization for taxi IL trajectories.
 
 Key optimizations:
 - Builds compact helper files (Parquet/NPY/NPZ) on first run and reuses them.
-- Avoids hashing the huge pickle in cache keys (uses a tiny file signature string).
-- Lazy per-expert loads, but precomputes the small things so sub-views are snappy.
 - Uses @st.fragment to avoid rerunning the whole script.
-- Replaces full sorts with np.argpartition for O(n) representative picks.
 - Plotly figures kept light (no per-point dataframes when not needed).
 
 Run:
-  pip install streamlit plotly pandas numpy pyarrow streamlit-plotly-events
+  pip install streamlit plotly pandas numpy pyarrow
   streamlit run app.py
 """
 
@@ -29,7 +26,7 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from streamlit_plotly_events import plotly_events
+# from streamlit_plotly_events import plotly_events
 import shutil
 
 # Set page config FIRST (before any spinner / error / sidebar usage)
@@ -302,6 +299,51 @@ def state_vec_from_pkl(DATA, expert: str, traj_idx: int, state_idx: int) -> np.n
     """Legacy stub retained for compatibility."""
     raise RuntimeError("PKL mode disabled (helper-only deployment).")
 
+# ---------------------- OPTIONAL HELPER LOADERS (SAFE STUBS) --------------------
+@st.cache_data(show_spinner=False)
+def load_visit_npz(path: str):
+    """Load visitation_overall.npz if present; else return None.
+    Returned array shape expected: (grid_h, grid_w, t_slots).
+    """
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        data = np.load(p)
+        # Accept either direct array or stored under a key
+        if isinstance(data, np.lib.npyio.NpzFile):
+            # Prefer a common key name if present
+            for k in ("visits", "arr_0"):
+                if k in data:
+                    return data[k]
+            # Fallback: first item
+            first_key = list(data.keys())[0]
+            return data[first_key]
+        return data
+    except Exception:
+        return None
+
+@st.cache_data(show_spinner=False)
+def load_paths(path: str, expert: Optional[str] = None) -> pd.DataFrame:
+    """Load paths.parquet if present. Optionally filter by expert.
+    Expected columns: expert, traj_idx, y, x, (optional t)
+    Returns empty DataFrame if unavailable or corrupt.
+    """
+    p = Path(path)
+    if not p.exists():
+        return pd.DataFrame(columns=["expert", "traj_idx", "y", "x", "t"])  # schema placeholder
+    try:
+        df = pd.read_parquet(p)
+    except Exception:
+        return pd.DataFrame(columns=["expert", "traj_idx", "y", "x", "t"])  # safe fallback
+    # Ensure required cols
+    for c in ["expert", "traj_idx", "y", "x"]:
+        if c not in df.columns:
+            return pd.DataFrame(columns=["expert", "traj_idx", "y", "x", "t"])
+    if expert is not None:
+        df = df[df["expert"].astype(str) == str(expert)]
+    return df
+
 def get_state_vector(expert: str, traj_idx: int, state_idx: int) -> np.ndarray:
     if expert not in lookup: return np.array([])
     traj_list = lookup[expert]
@@ -354,12 +396,12 @@ st.title("cGAIL Dataset Explorer — Shenzhen Taxi Dataset")
 
 # ---------------------- DATA SUMMARY METRICS -------------------------------------
 first_state_vec = STATES_MATRIX[0] if STATES_MATRIX.shape[0] else np.array([])
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Experts", f"{len(summary):,}")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total experts", f"{len(summary):,}")
 c2.metric("Total trajectories", f"{int(summary['trajectories'].sum()):,}")
 c3.metric("Total states visited in dataset", f"{int(summary['states_total'].sum()):,}")
 c4.metric("Features per state", f"{len(first_state_vec)}")
-c5.metric("Total data points in datasaet", f"{int(summary['states_total'].sum() * len(first_state_vec)):,}")
+# c5.metric("Total data points in datasaet", f"{int(summary['states_total'].sum() * len(first_state_vec)):,}")
 
 with st.expander("Model summary & data flow", expanded=False):
     st.markdown(f"""
@@ -450,7 +492,7 @@ else:
 
 st.divider()
 
-# ---------------------- SELECT → TRAJ → STATE (5) ---------------------------------
+# ---------------------- STATE VECTOR (5) ---------------------------------
 st.header("State vector")
 
 # We now use sidebar selections (sel_expert, sel_traj_idx, sel_state_idx)
@@ -474,9 +516,50 @@ bar = px.bar(feat_df, x="dim", y="value")
 bar.update_layout(height=260, margin=dict(l=0,r=0,t=10,b=20), xaxis=dict(showticklabels=False))
 st.plotly_chart(bar, use_container_width=True)
 
-# Traffic neighborhood (semantic peek)
+# --- Normalized (Z-score) view -------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def compute_norm_stats(matrix_path: str) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute per-dimension mean and std (ddof=0) for the full states matrix.
+    Returns (mean, std). Std values that are 0 are kept as 0 (guarded downstream).
+    Uses memory map already established by load_states_matrix.
+    """
+    mat = load_states_matrix(matrix_path)
+    # Compute along axis 0 (all states). Using float64 for stability.
+    mean = np.asarray(mat.mean(axis=0), dtype=float)
+    # For std we manually compute to avoid issues with masked arrays from mmap.
+    # Equivalent to np.std(mat, axis=0)
+    var = np.asarray(((mat - mean) ** 2).mean(axis=0), dtype=float)
+    std = np.sqrt(var)
+    return mean, std
+
+if vec.size:
+    mean_all, std_all = compute_norm_stats(str(STATES_NPY))
+    # Guard length mismatch (should not happen unless schema drift)
+    if mean_all.shape[0] == vec.shape[0]:
+        # Avoid division by zero: where std==0, set z=0 (feature constant)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            z = np.where(std_all > 0, (vec - mean_all) / std_all, 0.0)
+        z_df = pd.DataFrame({"dim": [f"f{i}" for i in range(len(z))], "z": z})
+        z_bar = px.bar(z_df, x="dim", y="z")
+        z_bar.update_layout(
+            height=260,
+            margin=dict(l=0,r=0,t=10,b=20),
+            xaxis=dict(showticklabels=False),
+            yaxis=dict(title="Z-score")
+        )
+        st.markdown("**State vector (normalized Z-score)** — per-dimension (value - mean) / std using all states.")
+        st.plotly_chart(z_bar, use_container_width=True)
+        st.caption("Normalization stats computed once per session across all states. Constant features (std=0) appear with z=0.")
+    else:
+        st.warning("Normalization skipped: feature count mismatch with global stats.")
+else:
+    st.info("No state vector available for normalization.")
+
+# ---------------------- TRAFFIC NEIGHBORHOOD (5×5 × 4 features) ---------------------------------
+
 st.header("**Traffic neighborhood for current state (5×5 × 4 features)**")
-# st.markdown("**Traffic neighborhood for current state (5×5 × 4 features)**")
+
 traffic_maps = reshape_traffic_maps(vec, traffic_start, traffic_len, n=TRAFFIC_NEIGHBORHOOD, feature_names=TRAFFIC_FEATURES)
 cols_tm = st.columns(4)
 for i, name in enumerate(TRAFFIC_FEATURES):

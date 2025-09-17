@@ -4,3 +4,4 @@ all_trajs.pkl
 data/all_trajs.pkl
 overkill_app.py
 original_app.py
+/data/states_all.npy
