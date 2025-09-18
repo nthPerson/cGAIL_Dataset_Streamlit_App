@@ -386,8 +386,6 @@ def reshape_traffic_maps(vec: np.ndarray,
         out[name] = np.asarray(sub, dtype=float).reshape(n, n)
     return out
 
-st.caption("Data mode: HELPER ONLY (no original pickle loaded)")
-
 # ================================================================================
 #                                APP BODY
 # ================================================================================
