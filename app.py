@@ -188,7 +188,10 @@ else:
         step=1, key="sidebar_state_idx"
     )
 
-st.sidebar.markdown("Selectors drive: State details (state vector and traffic features), Trajectory path, State visitation counts (Selected expert only).")
+st.sidebar.markdown(f"""## **Selectors drive:**
+- **State details** (state vector and traffic features)
+- **Trajectory path**
+- **State visitation counts** (Selected expert only).""")
 
 # ----------------------------- UTILS --------------------------------------------
 def file_sig(path: str) -> str:
