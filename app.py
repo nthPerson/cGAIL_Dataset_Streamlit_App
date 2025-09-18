@@ -26,11 +26,10 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-# from streamlit_plotly_events import plotly_events
 import shutil
 
 # Set page config FIRST (before any spinner / error / sidebar usage)
-st.set_page_config(page_title="Expert Explorer — fast IL viz", layout="wide")
+st.set_page_config(page_title="cGAIL Dataset Explorer", layout="wide")
 
 # ----------------------------- EARLY FAST LOADER NEEDED BY SIDEBAR ---------------
 @st.cache_data(show_spinner=False)
