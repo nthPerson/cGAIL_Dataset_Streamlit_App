@@ -1034,7 +1034,8 @@ def action_space_18() -> go.Figure:
       - Current / next markers for the SAME spatial move share the same y (no stagger).
       - Only a slight horizontal offset differentiates current vs next window.
     """
-    coords = [(dx, dy) for dy in [-1, 0, 1] for dx in [-1, 0, 1]]  # logical coords (dy=-1 => up)
+    # Logical coordinate offsets relative to center (0,0) then mapped to grid indices (col,row) in a 3x3 block.
+    coords = [(dx, dy) for dy in [-1, 0, 1] for dx in [-1, 0, 1]]  # dy=-1 => up
 
     def dir_label(dx, dy):
         if dx == 0 and dy == 0:
@@ -1048,19 +1049,31 @@ def action_space_18() -> go.Figure:
             return f"{parts[0]}-{parts[1]}"
         return parts[0]
 
-    # Flip vertical axis so dy=-1 (up) is rendered higher (positive y on screen)
-    base_x = [dx for dx, _ in coords]
-    base_y = [-dy for _, dy in coords]  # visual y
+    # Map to grid indices in 0..2 (center cell (1,1)) ; row index increases downward
+    base_x = [dx + 1 for dx, _ in coords]        # 0,1,2 columns
+    base_y = [(-dy) + 1 for _, dy in coords]     # invert dy then shift to 0..2
 
-    # Current window (no time advance)
+    # Current window (no time advance) marker positions
     xs_now = base_x
     ys_now = base_y
 
-    # Next window (time advance) – horizontal offset only so pairs align vertically
-    OFFSET = 0.08
-    # OFFSET = 0.18
-    xs_next = [x + (OFFSET if x <= 0 else -OFFSET) for x in base_x]
-    ys_next = base_y  # no vertical offset
+    # Next window (time advance) – place markers OUTSIDE and tangent to current markers along the ray from center (1,1)
+    # geometry: center (1,1); target cell center (cx,cy). Current marker radius r_now ~ (marker size 20) ~ visual ~0.18 cell units.
+    # We push next marker just beyond current marker: displacement factor slightly > 1.
+    r_now = 0.0  # we will use multiplicative scaling instead of fixed radius due to pixel-to-data mapping variability
+    scale_outer = 1.32  # >1 moves outside cell center along ray; tuned so marker edge sits just beyond current filled circle
+    xs_next, ys_next = [], []
+    for cx, cy, (dx, dy) in zip(base_x, base_y, coords):
+        if dx == 0 and dy == 0:
+            # Stay action: keep hollow marker slightly to the right of center for pair clarity
+            xs_next.append(cx + 0.28)
+            ys_next.append(cy)
+            continue
+        # direction vector from center to this cell center
+        vx = cx - 1
+        vy = cy - 1
+        xs_next.append(1 + vx * scale_outer)
+        ys_next.append(1 + vy * scale_outer)
 
     # Hover texts
     hover_now, hover_next = [], []
@@ -1075,6 +1088,18 @@ def action_space_18() -> go.Figure:
 
     fig = go.Figure()
 
+    # Add a 3x3 heatmap as white cells with subtle border coloring to visually match other grid-based panels
+    heat = go.Heatmap(
+        z=np.zeros((3,3)),
+        x=[0,1,2], y=[0,1,2],
+        showscale=False,
+        zmin=0, zmax=1,
+        colorscale=[[0,"#ffffff"],[1,"#ffffff"]],
+        xgap=2, ygap=2,
+        hoverinfo="skip"
+    )
+    fig.add_trace(heat)
+
     # Current time actions (filled)
     fig.add_trace(go.Scatter(
         x=xs_now, y=ys_now,
@@ -1087,7 +1112,7 @@ def action_space_18() -> go.Figure:
         hovertemplate="%{hovertext}<extra></extra>"
     ))
 
-    # Next time actions (hollow, horizontally shifted)
+    # Next time actions (hollow, offset outward)
     fig.add_trace(go.Scatter(
         x=xs_next, y=ys_next,
         mode="markers",
@@ -1097,34 +1122,52 @@ def action_space_18() -> go.Figure:
         hovertemplate="%{hovertext}<extra></extra>"
     ))
 
-    # Direction arrows from center
-    for dx, dy in coords:
+    # Direction arrows from center cell (1,1) to neighbors
+    for (dx, dy), x_cell, y_cell in zip(coords, base_x, base_y):
         if dx == 0 and dy == 0:
             continue
         fig.add_annotation(
-            x=dx * 0.7,
-            y=(-dy) * 0.7,
-            ax=0,
-            ay=0,
-            showarrow=True,             # <— required
-            arrowhead=3,
-            arrowsize=1,
-            arrowwidth=1.6,
+            x=x_cell, y=y_cell,
+            ax=1, ay=1,                # center (1,1)
+            xref="x", yref="y", axref="x", ayref="y",
+            showarrow=True,
+            arrowhead=0,
+            arrowsize=2.0,
+            arrowwidth=2.0,
             arrowcolor="#1f77b4",
             opacity=0.9
         )
 
     fig.update_layout(
-        height=340,
-        margin=dict(l=0, r=0, t=50, b=0),
-        title="18 actions: 9 spatial in current time window + same 9 with time advance",
-        xaxis=dict(range=[-1.5, 1.5], showticklabels=False, showgrid=False, zeroline=False),
-        yaxis=dict(range=[-1.5, 1.5], showticklabels=False, showgrid=False, zeroline=False),
-        legend=dict(orientation="h", y=1.02, x=0),
+        height=360,
+        margin=dict(l=0, r=0, t=50, b=5),
+        title="18 actions: 3×3 local grid (filled = current window, hollow = advance time)",
+        plot_bgcolor="#22262a",
+        xaxis=dict(
+            range=[-0.5, 2.5],
+            dtick=1,
+            showgrid=False,
+            zeroline=False,
+            constrain="domain",
+            showticklabels=False,
+            ticks=""
+        ),
+        yaxis=dict(
+            range=[-0.5, 2.5],
+            dtick=1,
+            showgrid=False,
+            zeroline=False,
+            scaleanchor="x",
+            scaleratio=1,
+            autorange="reversed",  # align with other heatmaps (row 0 at top visually)
+            showticklabels=False,
+            ticks=""
+        ),
+        legend=dict(orientation="h", y=1.02, x=0)
     )
     fig.add_annotation(
-        x=0, y=-1.35,
-        text="Filled = current window (no time advance) · Hollow = next window (advance time) · Total = 18 actions",
+        x=1, y=3.05,
+        text="Filled = current time window · Hollow = advance time · Cells align with other grid visuals",
         showarrow=False,
         font=dict(size=12, color="#bbbbbb")
     )
