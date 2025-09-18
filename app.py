@@ -29,7 +29,7 @@ import plotly.graph_objects as go
 import shutil
 
 # Set page config FIRST (before any spinner / error / sidebar usage)
-st.set_page_config(page_title="cGAIL Dataset Explorer", layout="wide")
+st.set_page_config(page_title="Shenzhen Taxi Dataset Explorer", layout="wide")
 
 # ----------------------------- EARLY FAST LOADER NEEDED BY SIDEBAR ---------------
 @st.cache_data(show_spinner=False)
