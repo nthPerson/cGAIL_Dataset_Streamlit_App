@@ -482,13 +482,31 @@ hist.update_layout(
 )
 st.plotly_chart(hist, use_container_width=True)
 
-cA, cB, cC = st.columns(3)
+# Search fraction selector and derived average search time metric
+search_fraction_label = st.radio(
+    "Assumed search percentage (portion of states that advance time window)",
+    ["10%", "25%", "35%", "50%"],
+    index=3,
+    horizontal=True,
+    key="search_fraction_choice"
+)
+_fraction_lookup = {"10%": 0.10, "25%": 0.25, "35%": 0.35, "50%": 0.50}
+search_fraction = _fraction_lookup[search_fraction_label]
+avg_search_minutes = (lens.mean() * search_fraction * 5) if lens.size else float('nan')
+
+cA, cB, cC, cD = st.columns(4)
 if lens.size:
     cA.metric("# Traj", f"{lens.size:,}")
-    cB.metric("Mean", f"{lens.mean():.1f}")
+    cB.metric("Mean length", f"{lens.mean():.1f}")
     cC.metric("Min/Max", f"{lens.min():.0f}/{lens.max():.0f}")
+    cD.metric("Avg search time (min)", f"{avg_search_minutes:.1f}")
 else:
-    cA.metric("# Traj", "0"); cB.metric("Mean","-"); cC.metric("Min/Max","-")
+    cA.metric("# Traj", "0")
+    cB.metric("Mean length", "-")
+    cC.metric("Min/Max", "-")
+    cD.metric("Avg search time (min)", "-")
+
+st.caption("Avg search time ≈ mean_length × chosen_fraction × 5 minutes per time-window state.")
 
 st.divider()
 
