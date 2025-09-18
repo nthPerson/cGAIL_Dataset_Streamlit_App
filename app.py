@@ -789,8 +789,11 @@ def draw_path_for_trajectory(expert: str, traj_idx: int, state_idx: int):
             x=xs[i+1], y=ys[i+1],
             ax=xs[i], ay=ys[i],
             xref="x", yref="y", axref="x", ayref="y",
-            arrowhead=3, arrowsize=1, arrowwidth=1.3,
-            opacity=0.55, arrowcolor="#26456e"
+            arrowhead=4,                # style of head
+            arrowsize=1.8,              # (was 1) scale factor for head size
+            arrowwidth=1.5,             # (was 1.3) shaft width
+            opacity=0.85,               # increase visibility
+            arrowcolor="#17324f"       # slightly darker for contrast
         )
 
     # Compute a height that preserves aspect ratio (rows/cols) for typical wide container
