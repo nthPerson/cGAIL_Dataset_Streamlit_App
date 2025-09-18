@@ -392,7 +392,7 @@ def reshape_traffic_maps(vec: np.ndarray,
 #                                APP BODY
 # ================================================================================
 
-st.title("cGAIL Dataset Explorer — Shenzhen Taxi Dataset")
+st.title("Shenzhen Taxi Dataset Explorer")
 
 # ---------------------- DATA SUMMARY METRICS -------------------------------------
 first_state_vec = STATES_MATRIX[0] if STATES_MATRIX.shape[0] else np.array([])
