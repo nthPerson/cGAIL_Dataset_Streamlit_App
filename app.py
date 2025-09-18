@@ -422,7 +422,7 @@ with st.expander("Model summary & data flow", expanded=False):
 st.divider()
 
 # ---------------------- HIERARCHY: EXPERTS → DISTRIBUTION (4) ---------------------
-st.header("Hierarchy")
+st.header("Dataset Hierarchy: Experts → Trajetories → States")
 
 @st.fragment
 def experts_treemap_panel():
@@ -467,7 +467,7 @@ def experts_treemap_panel():
 
 experts_treemap_panel()
 
-st.subheader("Trajectory length distribution (Expert selection from sidebar)")
+st.subheader(f"Trajectory length distribution for expert {sel_expert} (selected in sidebar)")
 
 # Use sidebar-selected expert (sel_expert) instead of local selectbox
 lens = load_lengths(helper_paths["lengths_dir"], sel_expert)
@@ -493,7 +493,7 @@ else:
 st.divider()
 
 # ---------------------- STATE VECTOR (5) ---------------------------------
-st.header("State vector")
+st.header("State-Level visualizations")
 
 # We now use sidebar selections (sel_expert, sel_traj_idx, sel_state_idx)
 lens_e = load_lengths(helper_paths["lengths_dir"], sel_expert)
@@ -510,7 +510,7 @@ if traj_len == 0:
 else:
     vec = get_state_vector(sel_expert, sel_traj_idx, sel_state_idx)
 
-st.markdown(f"**State vector (trajectory {sel_traj_idx}, state {sel_state_idx}) — Raw (unnormalized)**")
+st.markdown(f"#### **State vector (trajectory {sel_traj_idx}, state {sel_state_idx}) — Raw (unnormalized)**")
 feat_df = pd.DataFrame({"dim": [f"f{i}" for i in range(len(vec))], "value": vec})
 bar_raw = px.bar(feat_df, x="dim", y="value")
 bar_raw.update_layout(height=260, margin=dict(l=0,r=0,t=10,b=20), xaxis=dict(showticklabels=False))
@@ -596,7 +596,7 @@ elif show_norm and not vec.size:
 
 # ---------------------- TRAFFIC NEIGHBORHOOD (5×5 × 4 features) ---------------------------------
 
-st.header("**Traffic neighborhood for current state (5×5 × 4 features)**")
+st.markdown("#### **Traffic neighborhood for current state (5×5 × 4 features)**")
 
 traffic_maps = reshape_traffic_maps(vec, traffic_start, traffic_len, n=TRAFFIC_NEIGHBORHOOD, feature_names=TRAFFIC_FEATURES)
 cols_tm = st.columns(4)
