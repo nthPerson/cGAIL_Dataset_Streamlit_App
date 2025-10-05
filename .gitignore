@@ -6,3 +6,4 @@ overkill_app.py
 original_app.py
 /data/states_all.npy
 *__pycache__*
+app_data/states_all.npy

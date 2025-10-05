@@ -8,7 +8,8 @@ from typing import Dict
 # Paths
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR / "data"
+DATA_DIR = BASE_DIR / "app_data"
+# DATA_DIR = BASE_DIR / "data"
 STATES_NPY = DATA_DIR / "states_all.npy"
 TRAJ_INDEX_PARQUET = DATA_DIR / "traj_index.parquet"
 DEFAULT_PKL = os.environ.get("DATA_PKL", str(DATA_DIR / "all_trajs.pkl"))
