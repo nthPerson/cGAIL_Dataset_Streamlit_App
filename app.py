@@ -31,6 +31,7 @@ from data_access import ensure_hf_artifacts, get_states_matrix, load_summary
 from sidebar import build_sidebar
 from views import (
     render_action_space_section,
+    render_diagnostics_section,
     render_hierarchy_section,
     render_overview_section,
     render_state_level_section,
@@ -72,16 +73,25 @@ def main() -> None:
     render_state_level_section(selection)
 
     st.divider()
-    # Indices remain unavailable in helper-only deployment
-    x_idx = -1
-    y_idx = -1
+    # Coordinate indices are now confirmed at dimensions 0 (X) and 1 (Y)
+    x_idx = 0  # Updated: confirmed X coordinate index
+    y_idx = 1  # Updated: confirmed Y coordinate index
     render_trajectory_section(selection, GRID_H_DEFAULT, GRID_W_DEFAULT, x_idx, y_idx)
 
     st.divider()
     render_visitation_section(selection, GRID_H_DEFAULT, GRID_W_DEFAULT, x_idx, y_idx)
 
+    # =========================================================================
+    # DEPRECATED: Action space visualization (2025-10-08)
+    # =========================================================================
+    # Action space semantic reference is no longer needed for current analysis.
+    # Uncomment the lines below to temporarily re-enable.
+    # =========================================================================
+    # st.divider()
+    # render_action_space_section()
+
     st.divider()
-    render_action_space_section()
+    render_diagnostics_section(selection)
 
     st.markdown("Created by Dr. Xin Zhang and Robert Ashe at San Diego State University")
 

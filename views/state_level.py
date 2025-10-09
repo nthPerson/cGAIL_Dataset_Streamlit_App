@@ -118,56 +118,65 @@ def render_state_level_section(selection: SidebarSelection) -> None:
     elif show_norm and not vec.size:
         st.info("No state vector available for normalization.")
 
-    st.markdown("#### **Traffic neighborhood for current state (5×5 × 4 features)**")
-    traffic_maps = reshape_traffic_maps(
-        vec,
-        start=0,
-        traffic_len=TRAFFIC_COUNT_DEFAULT,
-        n=TRAFFIC_NEIGHBORHOOD,
-        feature_names=list(TRAFFIC_FEATURES),
-    )
-    cols_tm = st.columns(len(TRAFFIC_FEATURES))
-    for col, name in zip(cols_tm, TRAFFIC_FEATURES):
-        Z = traffic_maps[name]
-        hm = go.Figure(
-            data=[
-                go.Heatmap(
-                    z=Z,
-                    x=list(range(TRAFFIC_NEIGHBORHOOD)),
-                    y=list(range(TRAFFIC_NEIGHBORHOOD)),
-                    xgap=1,
-                    ygap=1,
-                    colorscale="Blues",
-                    zmin=np.nanmin(Z) if np.isfinite(Z).any() else 0,
-                    zmax=np.nanmax(Z) if np.isfinite(Z).any() else 1,
-                    hovertemplate="row=%{y}, col=%{x}<br>value=%{z:.3f}<extra></extra>",
-                )
-            ]
-        )
-        hm.update_layout(
-            title=name,
-            height=230,
-            margin=dict(l=0, r=0, t=30, b=0),
-            xaxis=dict(
-                range=[-0.5, TRAFFIC_NEIGHBORHOOD - 0.5],
-                tickmode="array",
-                tickvals=list(range(TRAFFIC_NEIGHBORHOOD)),
-                ticktext=[str(j + 1) for j in range(TRAFFIC_NEIGHBORHOOD)],
-                showgrid=False,
-                zeroline=False,
-                constrain="domain",
-            ),
-            yaxis=dict(
-                range=[-0.5, TRAFFIC_NEIGHBORHOOD - 0.5],
-                tickmode="array",
-                tickvals=list(range(TRAFFIC_NEIGHBORHOOD)),
-                ticktext=[str(j + 1) for j in range(TRAFFIC_NEIGHBORHOOD)],
-                autorange="reversed",
-                showgrid=False,
-                zeroline=False,
-                scaleanchor="x",
-                scaleratio=1,
-            ),
-            plot_bgcolor="#22262a",
-        )
-        col.plotly_chart(hm, use_container_width=True)
+    # =========================================================================
+    # DEPRECATED: Traffic neighborhood visualization (2025-10-08)
+    # =========================================================================
+    # This section is preserved but disabled. Traffic features are now sourced
+    # from latest_traffic.pkl instead of state vector dimensions 4-103.
+    # Uncomment the block below to temporarily re-enable for debugging.
+    # =========================================================================
+    
+    # st.markdown("#### **Traffic neighborhood for current state (5×5 × 4 features)** — DEPRECATED")
+    # st.warning("⚠️ This visualization is deprecated. Traffic data now sourced from `latest_traffic.pkl`.")
+    # traffic_maps = reshape_traffic_maps(
+    #     vec,
+    #     start=0,
+    #     traffic_len=TRAFFIC_COUNT_DEFAULT,
+    #     n=TRAFFIC_NEIGHBORHOOD,
+    #     feature_names=list(TRAFFIC_FEATURES),
+    # )
+    # cols_tm = st.columns(len(TRAFFIC_FEATURES))
+    # for col, name in zip(cols_tm, TRAFFIC_FEATURES):
+    #     Z = traffic_maps[name]
+    #     hm = go.Figure(
+    #         data=[
+    #             go.Heatmap(
+    #                 z=Z,
+    #                 x=list(range(TRAFFIC_NEIGHBORHOOD)),
+    #                 y=list(range(TRAFFIC_NEIGHBORHOOD)),
+    #                 xgap=1,
+    #                 ygap=1,
+    #                 colorscale="Blues",
+    #                 zmin=np.nanmin(Z) if np.isfinite(Z).any() else 0,
+    #                 zmax=np.nanmax(Z) if np.isfinite(Z).any() else 1,
+    #                 hovertemplate="row=%{y}, col=%{x}<br>value=%{z:.3f}<extra></extra>",
+    #             )
+    #         ]
+    #     )
+    #     hm.update_layout(
+    #         title=name,
+    #         height=230,
+    #         margin=dict(l=0, r=0, t=30, b=0),
+    #         xaxis=dict(
+    #             range=[-0.5, TRAFFIC_NEIGHBORHOOD - 0.5],
+    #             tickmode="array",
+    #             tickvals=list(range(TRAFFIC_NEIGHBORHOOD)),
+    #             ticktext=[str(j + 1) for j in range(TRAFFIC_NEIGHBORHOOD)],
+    #             showgrid=False,
+    #             zeroline=False,
+    #             constrain="domain",
+    #         ),
+    #         yaxis=dict(
+    #             range=[-0.5, TRAFFIC_NEIGHBORHOOD - 0.5],
+    #             tickmode="array",
+    #             tickvals=list(range(TRAFFIC_NEIGHBORHOOD)),
+    #             ticktext=[str(j + 1) for j in range(TRAFFIC_NEIGHBORHOOD)],
+    #             autorange="reversed",
+    #             showgrid=False,
+    #             zeroline=False,
+    #             scaleanchor="x",
+    #             scaleratio=1,
+    #         ),
+    #         plot_bgcolor="#22262a",
+    #     )
+    #     col.plotly_chart(hm, use_container_width=True)
