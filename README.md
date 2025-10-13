@@ -27,20 +27,28 @@ python build_helper_artifacts.py
 
 ```
 streamlit/
-├─ app.py            # Orchestrates boot sequence and view ordering
-├─ config.py         # Dataset signature, feature constants, Hugging Face settings
-├─ data_access.py    # Cached loaders, HF downloads, derived helper builders
-├─ sidebar.py        # Streamlit sidebar and selection dataclass
-├─ views/            # Independent Streamlit fragments for each visual
-│  ├─ overview.py
-│  ├─ hierarchy.py
-│  ├─ state_level.py
-│  ├─ trajectory.py
-│  ├─ visitation.py
-│  └─ action_space.py
-├─ build_helper_artifacts.py
-├─ data/             # Core helper artifacts (downloaded if missing)
-└─ derived/          # Locally generated helper files
+├─ app.py                      # Orchestrates boot sequence and view ordering
+├─ config.py                   # Grid/feature constants, paths, HF settings
+├─ data_access.py              # Cached loaders, HF downloads, helper builders
+├─ sidebar.py                  # Streamlit sidebar and selection dataclass
+├─ views/                      # Independent Streamlit fragments for each visual
+│  ├─ overview.py             # Dataset KPIs and summary
+│  ├─ hierarchy.py            # Expert treemap and trajectory histograms
+│  ├─ state_level.py          # Individual state feature analysis
+│  ├─ trajectory.py           # Path visualization on grid
+│  ├─ visitation.py           # Heatmaps of state visitation
+│  ├─ diagnostics.py          # Dimension analysis tools
+│  └─ action_space.py         # (Deprecated) Action glyph reference
+├─ build_helper_artifacts.py  # Helper file regeneration script
+├─ app_data/                   # Core data files (states, indices, CSVs)
+│  └─ README_DATA_SOURCES.md  # Complete data catalog
+├─ derived/                    # Generated helpers (summaries, stats, caches)
+└─ ai_context_docs/           # Documentation for AI agents
+   ├─ PROJECT_OVERVIEW.md     # Architecture and quick start
+   ├─ DATA_MODEL.md           # State vector and grid specification
+   ├─ VISUALS_SPEC.md         # Per-panel acceptance criteria
+   ├─ DEV_GUIDE.md            # Caching, fragments, performance
+   └─ archive/                # Historical docs and fixes
 ```
 
 Key ideas:
@@ -69,14 +77,19 @@ All panels react to the shared sidebar controls (expert, trajectory index, state
 
 ## Data Sources
 
-### Core Helper Artifacts (`data/`)
+### Core Helper Artifacts (`app_data/`)
 
 | File | Description |
 |------|-------------|
-| `states_all.npy` | Concatenated state feature matrix (≈126 dims each). |
+| `states_all.npy` | Concatenated state feature matrix (666,729 states × 126 dims). |
 | `traj_index.parquet` | Mapping from `(expert, traj_idx)` to `(start, length)` offsets into `states_all.npy`. |
+| `grid_to_district_ArcGIS_table.csv` | Maps 4,500 grid cells to Shenzhen districts with overlap metrics. |
+| `district_id_mapping.csv` | District name to integer ID lookup. |
+| Various socioeconomic CSVs | Housing prices, GDP, population, employment by district. |
 
-These files are pulled from Hugging Face if missing. Downloads use `local_dir_use_symlinks=False` to avoid cross-device rename issues.
+**Note**: `states_all.npy` and `traj_index.parquet` are pulled from Hugging Face if missing. Downloads use `local_dir_use_symlinks=False` to avoid cross-device rename issues.
+
+See `app_data/README_DATA_SOURCES.md` for complete data catalog.
 
 ### Derived Helpers (`derived/`)
 
@@ -92,11 +105,34 @@ Derived helpers are rebuilt automatically when signatures drift, or manually via
 
 ---
 
-## Data Model & Visual Specs
+## Documentation
 
-- **Data schema:** See `ai_context_docs/DATA_MODEL.md` for detailed feature indices, grid/time configuration, and helper pipeline notes.
-- **Visual contracts:** See `ai_context_docs/VISUALS_SPEC.md` for per-panel inputs, interactions, and acceptance criteria.
-- **Developer details:** `ai_context_docs/DEV_GUIDE.md` covers caching rules, fragments, and performance targets.
+All documentation is organized in `ai_context_docs/`:
+
+- **PROJECT_OVERVIEW.md**: Architecture, quick start, recent updates, future plans
+- **DATA_MODEL.md**: Grid system, state vector schema, data files, integration patterns
+- **VISUALS_SPEC.md**: Per-panel inputs, interactions, and acceptance criteria
+- **DEV_GUIDE.md**: Caching rules, fragments, performance targets, debugging tips
+- **archive/**: Historical documentation (coordinate fixes, dimension analysis, update logs)
+
+For complete data source details, see `app_data/README_DATA_SOURCES.md`.
+
+---
+
+## Recent Updates
+
+### 2025-10-12: Documentation Consolidation
+- Moved historical docs to `ai_context_docs/archive/`
+- Created `PROJECT_OVERVIEW.md` for comprehensive project context
+- Renamed data README to `README_DATA_SOURCES.md`
+- Added grid-to-district mapping files
+- Streamlined AI agent documentation
+
+### 2025-10-08: Grid Dimension & Coordinate Fix
+- Updated grid size from 40×50 to 50×90
+- Fixed coordinate swap (dim 0=Y, dim 1=X)
+- Deprecated traffic neighborhood and action space visualizations
+- Clarified only dimensions 0-3 are active
 
 ---
 

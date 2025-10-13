@@ -1,16 +1,61 @@
-# Shenzhen Socioeconomic & Demographic Data (Supplemental Datasets)
+# Data Sources Reference — Shenzhen Taxi Expert Explorer
 
-This directory contains supplemental, low‑volume tabular datasets (CSV) describing **district‑level socioeconomic, demographic, and economic structure metrics for Shenzhen**. They are intended to enrich or contextualize the taxi imitation‑learning explorer (e.g., for per‑district overlays, narrative KPIs, or conditioning experiments).
-
-All CSV files are *wide* or *tall‑wide hybrids* with a small number of rows (districts or months) and modest column counts. File sizes are tiny (< ~10 KB each), so eager loading and in‑memory joins are practical.
+This document catalogs **all data sources** used in the Streamlit application, including core trajectory data, helper artifacts, and supplemental socioeconomic datasets.
 
 ---
-## Common Dimensions / Keys
-- **District / Region**: Administrative unit (e.g., Futian, Nanshan, Luohu, Yantian, Bao'an, Longgang, Longhua, Pingshan, Guangming, Dapeng). Some historical / transitional rows include `Original_Bao'an`, `Original_Longgang`, or an aggregate `Total` row.
-- **Time**: Only the housing price file is time‑series (monthly). Others are single snapshot aggregates (year not explicitly encoded—assumed contemporaneous extraction; add a `year` column upstream if multi‑year series are introduced later).
+
+## Core Trajectory Data
+
+### Primary Sources (Required)
+
+| File | Location | Format | Description |
+|------|----------|--------|-------------|
+| `states_all.npy` | `app_data/` | NumPy array | Concatenated state feature matrix (666,729 states × 126 dimensions). Downloaded from Hugging Face if missing. |
+| `traj_index.parquet` | `app_data/` | Parquet | Trajectory index mapping `(expert, traj_idx)` to `(start, length)` offsets into `states_all.npy`. |
+
+### Helper Artifacts (Generated)
+
+| File | Location | Format | Description |
+|------|----------|--------|-------------|
+| `experts_summary.parquet` | `derived/` | Parquet | Per-expert aggregates (trajectory counts, state statistics) for KPI and hierarchy views. |
+| `lengths_by_expert/{expert}.npy` | `derived/lengths_by_expert/` | NumPy array | Cached trajectory lengths for each expert, used in histograms. |
+| `norm_stats.npz` | `derived/` | NPZ archive | Per-feature normalization statistics (mean, std, min, max, median, MAD). |
+| `derived_meta.json` | `derived/` | JSON | Dataset signature, grid dimensions, and helper build metadata. |
+| `paths.parquet` | `derived/` (optional) | Parquet | Extracted (x, y) paths for all trajectories when coordinate indices are known. |
+| `visitation_overall.npz` | `derived/` (optional) | NPZ archive | Precomputed visitation counts across all experts. |
 
 ---
-## Dataset Inventory & Schemas
+
+## Spatial Mapping Data
+
+### Grid-to-District Mapping (New)
+
+| File | Location | Columns | Description |
+|------|----------|---------|-------------|
+| `grid_to_district_ArcGIS_table.csv` | `app_data/` | `OID_`, `row`, `col`, `cell_id`, `Shape_Length`, `Shape_Area`, `cell_area`, `district`, `overlap_m2`, `overlap_pct`, `district_id` | Maps each grid cell (50×90 grid) to its corresponding Shenzhen district. Includes overlap area and percentage for cells spanning multiple districts. |
+| `district_id_mapping.csv` | `app_data/` | `district`, `district_id` | Simple lookup table mapping district names to integer IDs for efficient joins. |
+
+**Key Notes:**
+- **Grid structure**: 50 rows × 90 columns = 4,500 cells
+- **Coordinate system**: 
+  - `row` corresponds to Y (dimension 0, range [0, 49])
+  - `col` corresponds to X (dimension 1, range [0, 89])
+  - Origin at top-left (0, 0)
+- **District assignment**: Use `overlap_pct` to determine primary district if cell spans multiple districts (e.g., assign to district with highest overlap percentage)
+
+---
+
+## Socioeconomic & Demographic Data
+
+All CSV files below are district-level supplemental datasets for enriching trajectory analysis with contextual socioeconomic metrics.
+
+### Common Dimensions
+- **District / Region**: Administrative unit (Futian, Nanshan, Luohu, Yantian, Bao'an, Longgang, Longhua, Pingshan, Guangming, Dapeng)
+- **Time**: Only housing price file is time-series (monthly). Others are snapshot aggregates.
+
+---
+
+## Supplemental Dataset Inventory
 
 ### 1. `avg_housing_price_per_sq_meter_by_district.csv`
 Monthly average **residential housing prices** (currency units per square meter) by district.
@@ -110,6 +155,55 @@ Geospatial and population density metrics.
 - `registered_share = registered / permanent`
 - `non_registered_ratio = non_registered / registered`
 - Cross‑check: `(registered + non_registered) ≈ permanent`.
+
+### 8. `grid_to_district_ArcGIS_table.csv` ⭐ NEW
+**Critical spatial mapping file** connecting the 50×90 grid to Shenzhen districts.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `OID_` | int | Object ID from ArcGIS export (sequential, not used for joins). |
+| `row` | int | Grid row index [0, 49]. Maps to Y coordinate (dim 0 in state vector). |
+| `col` | int | Grid column index [0, 89]. Maps to X coordinate (dim 1 in state vector). |
+| `cell_id` | int | Unique cell identifier (typically `row * 90 + col`). |
+| `Shape_Length` | float | Perimeter of grid cell polygon (meters). |
+| `Shape_Area` | float | Area of grid cell polygon (square meters). |
+| `cell_area` | float | Cell area (may differ slightly from `Shape_Area` due to projection). |
+| `district` | string | District name this cell intersects (primary assignment). |
+| `overlap_m2` | float | Overlap area between cell and district (square meters). |
+| `overlap_pct` | float | Percentage of cell covered by this district (0-100). |
+| `district_id` | int | Integer ID for district (foreign key to `district_id_mapping.csv`). |
+
+**Key Notes:**
+- **4,500 total cells** (50 rows × 90 columns)
+- **Multi-district cells**: Some cells span multiple districts; use `overlap_pct` to determine primary district
+- **Coordinate mapping**: `row` → Y (dim 0), `col` → X (dim 1)
+- **Join key**: Use `(row, col)` or `cell_id` to link grid cells to trajectories
+
+**Usage Examples:**
+```python
+# Load mapping
+grid_map = pd.read_csv('grid_to_district_ArcGIS_table.csv')
+
+# Get district for cell (y=20, x=35)
+district = grid_map[(grid_map.row == 20) & (grid_map.col == 35)].district.iloc[0]
+
+# Find primary district for multi-district cells
+primary = grid_map.sort_values('overlap_pct', ascending=False).groupby(['row', 'col']).first()
+```
+
+### 9. `district_id_mapping.csv` ⭐ NEW
+Simple lookup table for district names to integer IDs.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `district` | string | Official district name (canonical form). |
+| `district_id` | int | Unique integer identifier for joins and efficient storage. |
+
+**Districts included** (10 total):
+- Futian, Nanshan, Luohu, Yantian, Bao'an, Longgang
+- Longhua, Pingshan, Guangming, Dapeng
+
+**Usage**: Join with `grid_to_district_ArcGIS_table.csv` or socioeconomic CSVs for consistent district identification.
 
 ---
 ## Cross‑File Harmonization Recommendations

@@ -73,9 +73,10 @@ def main() -> None:
     render_state_level_section(selection)
 
     st.divider()
-    # Coordinate indices are now confirmed at dimensions 0 (X) and 1 (Y)
-    x_idx = 0  # Updated: confirmed X coordinate index
-    y_idx = 1  # Updated: confirmed Y coordinate index
+    # Coordinate indices are now confirmed at dimensions 1 (X) and 0 (Y)
+    # CORRECTED 2025-10-08: Data analysis revealed dimensions were swapped
+    x_idx = 1  # Updated: confirmed X coordinate is in dimension 1 (column)
+    y_idx = 0  # Updated: confirmed Y coordinate is in dimension 0 (row)
     render_trajectory_section(selection, GRID_H_DEFAULT, GRID_W_DEFAULT, x_idx, y_idx)
 
     st.divider()

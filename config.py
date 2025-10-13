@@ -64,15 +64,17 @@ ACTION_MODE = "18 actions (extended)"
 # Feature indices — UPDATED 2025-10-08 based on team confirmation
 # ---------------------------------------------------------------------------
 # CONFIRMED: Only dimensions 0-3 are used from state vector (126 total dims)
-# - Dimension 0: X coordinate (grid column) [0, 89]
-# - Dimension 1: Y coordinate (grid row) [0, 49]
+# - Dimension 0: Y coordinate (grid row) [0, 49] — CORRECTED 2025-10-08
+# - Dimension 1: X coordinate (grid column) [0, 89] — CORRECTED 2025-10-08
 # - Dimension 2: Temporal feature 1 (time slot or time-of-day)
 # - Dimension 3: Temporal feature 2 (day-of-week or secondary temporal)
 # - Dimensions 4-124: NOT USED (alternate data sources replace these)
 # - Dimension 125: Action label [0, 18] (expert's chosen action)
 
-EXPECTED_X_IDX = 0  # Grid column (0-based, range [0, 89])
-EXPECTED_Y_IDX = 1  # Grid row (0-based, range [0, 49])
+# IMPORTANT: Data analysis revealed dimensions were swapped from initial assumption
+# Empirical ranges: dim0=[3,48] (50-row span), dim1=[1,81] (90-column span)
+EXPECTED_Y_IDX = 0  # Grid row (0-based, range [0, 49]) — dimension 0
+EXPECTED_X_IDX = 1  # Grid column (0-based, range [0, 89]) — dimension 1
 EXPECTED_T_IDX = 2  # Primary temporal feature
 EXPECTED_T2_IDX = 3  # Secondary temporal feature
 
